@@ -38,27 +38,9 @@ class SmarActMCS:
         """Closes the MCS system."""
         self.lib.SA_CloseSystem(self.system_index)
 
-    def move_relative(self, channel: int, delta_nm: int, hold_ms: int = 1000):
-        """
-        Moves the stage by a relative distance. (Closed loop mode)
-
-        Parameters
-        ----------
-        channel : int
-            Channel index
-        delta_nm : int
-            Distance in nanometers
-        hold_ms : int
-            Time to hold position after move
-        """
-        res = self.lib.SA_GotoPositionRelative_S(self.system_index, channel, delta_nm, hold_ms)
-        if res != SA_OK:
-            raise RuntimeError(f"SA_GotoPositionRelative_S failed with code {res}")
-        self._wait_until_done(channel)
-
     def step_move(self, channel: int, steps: int, amplitude: int = 4095, frequency: int = 2000):
         """
-        Performs a step move (if no sensor present).
+        Performs a step mov.
 
         Parameters
         ----------
