@@ -1,129 +1,139 @@
-import sys
-import threading
+import os, ctypes, sys
+from datetime import datetime
+
+def init_controller_dll(dll_name="MCSControl.dll"):
+    """
+    Locate, add to search path and preload the SmarAct controller DLL.
+    Returns (ctypes_lib, absolute_path_to_dll). 
+    This fixes the windows error 1114 "A dynamic link library (DLL) initialization routine failed". 
+    Needs to be called before PyQt5 imports.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    dll_dir  = os.path.join(base_dir, "dll")
+
+    if hasattr(os, "add_dll_directory"):
+        os.add_dll_directory(dll_dir)
+
+    dll_path = os.path.join(dll_dir, dll_name)
+    ctypes.WinDLL(dll_path)
+    return dll_path
+
+DLL_PATH = init_controller_dll()
+
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QComboBox, QLineEdit, QTextEdit
+    QApplication, QMainWindow, QWidget,
+    QVBoxLayout, QGroupBox, QFormLayout,
+    QSpinBox, QPushButton, QLabel,
+    QTextEdit
 )
 from MCS1.smaract_mcs1 import SmarActMCS
 
-class MainWindow(QMainWindow):
+class SmaractMSCApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SmarAct GUI")
-        self.mcs = None
+        self.setWindowTitle("MCS Controller")
+
+        self.mcs = SmarActMCS(DLL_PATH)
+        self.system_open = False
+
         self._build_ui()
-        
+
     def _build_ui(self):
-        w = QWidget()
-        v = QVBoxLayout()
-        # Connect / Disconnect
-        h0 = QHBoxLayout()
-        self.btn_connect = QPushButton("Connect")
-        self.btn_disconnect = QPushButton("Disconnect")
-        self.btn_disconnect.setEnabled(False)
-        h0.addWidget(self.btn_connect)
-        h0.addWidget(self.btn_disconnect)
-        v.addLayout(h0)
-        # Channel selector
-        h1 = QHBoxLayout()
-        h1.addWidget(QLabel("Channel:"))
-        self.cb_channel = QComboBox()
-        self.cb_channel.setEnabled(False)
-        h1.addWidget(self.cb_channel)
-        v.addLayout(h1)
-        # Relative move
-        h2 = QHBoxLayout()
-        h2.addWidget(QLabel("Δ (nm):"))
-        self.le_delta = QLineEdit("1000")
-        h2.addWidget(self.le_delta)
-        self.btn_rel = QPushButton("Move Relative")
-        self.btn_rel.setEnabled(False)
-        h2.addWidget(self.btn_rel)
-        v.addLayout(h2)
-        # Step move
-        h3 = QHBoxLayout()
-        h3.addWidget(QLabel("Steps:"))
-        self.le_steps = QLineEdit("10000")
-        h3.addWidget(self.le_steps)
-        h3.addWidget(QLabel("Amp:"))
-        self.le_amp = QLineEdit("4095")
-        h3.addWidget(self.le_amp)
-        h3.addWidget(QLabel("Freq:"))
-        self.le_freq = QLineEdit("2000")
-        h3.addWidget(self.le_freq)
-        self.btn_step = QPushButton("Step Move")
-        self.btn_step.setEnabled(False)
-        h3.addWidget(self.btn_step)
-        v.addLayout(h3)
-        # Log
+        central = QWidget()
+        layout = QVBoxLayout()
+
+        self.open_btn = QPushButton("Open MCS System")
+        self.open_btn.clicked.connect(self.open_system)
+        self.status_label = QLabel("System closed")
+
+        layout.addWidget(self.open_btn)
+        layout.addWidget(self.status_label)
+
+        self.channel_groups = []
+        for ch in (1, 2, 3):
+            grp, controls = self._make_channel_box(ch)
+            grp.setEnabled(False)
+            self.channel_groups.append((grp, controls))
+            layout.addWidget(grp)
+
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        v.addWidget(self.log)
-        # signals
-        self.btn_connect.clicked.connect(self.connect)
-        self.btn_disconnect.clicked.connect(self.disconnect)
-        self.btn_rel.clicked.connect(self.move_relative)
-        self.btn_step.clicked.connect(self.step_move)
-        w.setLayout(v)
-        self.setCentralWidget(w)
-        
+        self.log.setPlaceholderText("Log messages will appear here...")
+        layout.addWidget(self.log, stretch=1)
+
+        central.setLayout(layout)
+        self.setCentralWidget(central)
+
+    def _make_channel_box(self, channel):
+        box = QGroupBox(f"Channel {channel}")
+        form = QFormLayout()
+
+        steps = QSpinBox()
+        steps.setRange(-1_000_000, 1_000_000)
+        steps.setValue(200)
+
+        amp = QSpinBox()
+        amp.setRange(1, 4095)
+        amp.setValue(4095)
+
+        freq = QSpinBox()
+        freq.setRange(1, 20_000)
+        freq.setValue(2000)
+
+        btn = QPushButton("Move")
+        btn.clicked.connect(
+            lambda _, ch=channel, s=steps, a=amp, f=freq:
+                self.move_channel(ch, s.value(), a.value(), f.value())
+        )
+
+        form.addRow("Steps:", steps)
+        form.addRow("Amplitude:", amp)
+        form.addRow("Frequency:", freq)
+        form.addRow(btn)
+        box.setLayout(form)
+
+        return box, (steps, amp, freq, btn)
+
     def log_msg(self, text):
-        self.log.append(text)
-        
-    def connect(self):
+        ts = datetime.now().strftime("[%H:%M:%S]")
+        self.log.append(f"{ts} {text}")
+
+    def open_system(self):
         try:
-            self.mcs = SmarActMCS("dll/MCSControl.dll")
+            self.log_msg("Opening MCS system...")
             self.mcs.open()
-            n = self.mcs.get_num_channels()
-            self.cb_channel.clear()
-            for i in range(n):
-                self.cb_channel.addItem(str(i))
-            self.log_msg(f"Connected: {n} channels found")
-            self.btn_connect.setEnabled(False)
-            self.btn_disconnect.setEnabled(True)
-            self.cb_channel.setEnabled(True)
-            self.btn_rel.setEnabled(True)
-            self.btn_step.setEnabled(True)
+            num = self.mcs.get_num_channels()
+            self.status_label.setText(f"System open, {num} channels found")
+            self.log_msg(f"System opened with {num} channels")
+            self.open_btn.setEnabled(False)
+            for grp, _ in self.channel_groups:
+                grp.setEnabled(True)
+            self.system_open = True
         except Exception as e:
-            self.log_msg(f"Error: {e}")
-        
-    def disconnect(self):
-        if self.mcs:
+            self.log_msg(f"ERROR: {e}")
+
+    def move_channel(self, ch, steps, amp, freq):
+        if not self.system_open:
+            self.log_msg("WARNING: System not open")
+            return
+        try:
+            self.log_msg(f"Moving channel {ch}: steps={steps}, amp={amp}, freq={freq}")
+            self.mcs.step_move(ch, steps, amp, freq)
+            self.log_msg(f"Channel {ch} move completed")
+        except Exception as e:
+            self.log_msg(f"ERROR: {e}")
+
+    def closeEvent(self, event):
+        if self.system_open:
+            self.log_msg("Closing MCS system...")
             self.mcs.close()
-            self.log_msg("Disconnected")
-            self.btn_connect.setEnabled(True)
-            self.btn_disconnect.setEnabled(False)
-            self.cb_channel.setEnabled(False)
-            self.btn_rel.setEnabled(False)
-            self.btn_step.setEnabled(False)
-            self.mcs = None
-        
-    def move_relative(self):
-        ch = int(self.cb_channel.currentText())
-        dn = int(self.le_delta.text())
-        def job():
-            try:
-                self.mcs.move_relative(ch, dn)
-                self.log_msg(f"Relative move {dn} nm on ch {ch} done")
-            except Exception as e:
-                self.log_msg(f"Error: {e}")
-        threading.Thread(target=job, daemon=True).start()
-        
-    def step_move(self):
-        ch = int(self.cb_channel.currentText())
-        steps = int(self.le_steps.text())
-        amp = int(self.le_amp.text())
-        freq = int(self.le_freq.text())
-        def job():
-            try:
-                self.mcs.step_move(ch, steps, amp, freq)
-                self.log_msg(f"Step move {steps} on ch {ch} done")
-            except Exception as e:
-                self.log_msg(f"Error: {e}")
-        threading.Thread(target=job, daemon=True).start()
+            self.log_msg("System closed")
+        super().closeEvent(event)
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    mw = MainWindow()
-    mw.show()
+    w = SmaractMSCApp()
+    w.resize(400, 600)
+    w.show()
     sys.exit(app.exec_())

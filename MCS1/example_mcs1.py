@@ -5,7 +5,7 @@ print("Opening MCS system...")
 mcs.open()
 print("Number of channels:", mcs.get_num_channels())
 channel = 1
-steps = 200
+steps = -2000
 amplitude = 4095
 frequency = 2000
 print(f"Moving channel {channel} {steps} steps with amplitude {amplitude} and frequency {frequency}")
